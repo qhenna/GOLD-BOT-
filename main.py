@@ -484,7 +484,10 @@ def praca_robota():
     except Exception as e: print(f"[Scheduler] {e}")
 
 scheduler=BackgroundScheduler()
-scheduler.add_job(praca_robota,"interval",minutes=60)
+# Skanujemy o :01 każdej godziny — dokładnie minutę po zamknięciu świecy 1H.
+# To jest optymalny timing dla strategii 1H: zawsze świeżo zamknięta świeca,
+# zero duplikatów sygnałów, minimalna liczba zapytań do API (24/dobę zamiast 1440).
+scheduler.add_job(praca_robota,"cron",minute=1)
 scheduler.start()
 
 if __name__=="__main__":
