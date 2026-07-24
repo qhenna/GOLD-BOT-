@@ -120,15 +120,16 @@ with tab1:
                 line=dict(color="#FFA500", width=1.5, dash="dash")
             ))
 
-        # SL i TP
-        fig.add_hline(y=ryzyko["proponowany_take_profit_usd"],
-                      line_dash="dash", line_color="#00C853", line_width=1.5,
-                      annotation_text="🎯 TP", annotation_position="right",
-                      annotation_font_color="#00C853")
-        fig.add_hline(y=ryzyko["proponowany_stop_loss_usd"],
-                      line_dash="dash", line_color="#FF1744", line_width=1.5,
-                      annotation_text="🛑 SL", annotation_position="right",
-                      annotation_font_color="#FF1744")
+        # SL i TP — wyświetlamy TYLKO gdy jest aktywny sygnał (nie HOLD)
+        if rek != "HOLD":
+            fig.add_hline(y=ryzyko["proponowany_take_profit_usd"],
+                          line_dash="dash", line_color="#00C853", line_width=1.5,
+                          annotation_text="🎯 TP", annotation_position="right",
+                          annotation_font_color="#00C853")
+            fig.add_hline(y=ryzyko["proponowany_stop_loss_usd"],
+                          line_dash="dash", line_color="#FF1744", line_width=1.5,
+                          annotation_text="🛑 SL", annotation_position="right",
+                          annotation_font_color="#FF1744")
 
         # Poziomy strukturalne (te w zasięgu ±3% ceny)
         KOLOR_POZIOMU = {
