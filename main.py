@@ -25,7 +25,9 @@ PLIK_SYMULACJI = "symulacje.json"
 SL_ATR_MULT        = 1.5
 TP_R_MULT          = 2.0
 EMA_CONF_TOLERANCE = 1.0
-APPROACH_THRESHOLD = 3.0
+APPROACH_THRESHOLD = 1.5    # było 3.0 — teraz tylko sygnały BLISKO poziomu
+MIN_CONFLUENCJA    = 3      # było 2 — teraz WSZYSTKIE 3 czynniki muszą grać
+N_SLOPE_BARS       = 168    # 1 tydzień godzinowych świec = okno kierunku EMA200
 RISK_PCT           = 0.05
 ROUND_STEP         = 50
 
@@ -256,6 +258,11 @@ def generuj_sygnal(metal: str) -> dict:
     lc=float(df["Low"].iloc[-1]);      hc=float(df["High"].iloc[-1])
     lp=float(df["Low"].iloc[-2]);      hp=float(df["High"].iloc[-2])
 
+    # Kierunek EMA200 w ostatnim tygodniu — filtr antytrendowy
+    n_sl = min(N_SLOPE_BARS, len(df)-1)
+    trend_w = 1 if ema200 > float(df["EMA200"].iloc[-1-n_sl]) else -1
+    trend_w_opis = "📈 EMA200 rośnie (sprzyja LONG)" if trend_w > 0 else "📉 EMA200 spada (sprzyja SHORT)"
+
     makro = analizuj_dxy()
     pdh_s,pdl_s,pwh_s,pwl_s = oblicz_pdh_pdl_pwh_pwl(df)
     static=[]
@@ -279,12 +286,14 @@ def generuj_sygnal(metal: str) -> dict:
             eok=abs(ema50-poz)<=EMA_CONF_TOLERANCE*atr; tok=cena>ema200
             sila=1+int(eok)+int(tok)
             sl_p=round(poz-sl_dist,2); tp_p=round(cena+abs(cena-sl_p)*TP_R_MULT,2); pobj=lw
-            if sila>=2 and not makro["silny_dolar"]:
+            if sila>=MIN_CONFLUENCJA and trend_w > 0 and not makro["silny_dolar"]:
                 akcja="BUY"; opis=(f"🔥 LONG od wsparcia ${poz} [{lw['typ']}]"
-                                   +(" + EMA 50" if eok else "")+(" + trend" if tok else ""))
-            elif sila>=1:
+                                   +(" + EMA 50" if eok else "")+(" + trend" if tok else "")
+                                   +f" | {trend_w_opis}")
+            elif sila>=2:
                 akcja="CAUTION_BUY"
-                opis=f"⚠️ OSTROŻNY LONG od ${poz} [{lw['typ']}] (confluencja: {sila}/3)"
+                opis=(f"⚠️ OSTROŻNY LONG od ${poz} [{lw['typ']}] "
+                      f"(confluencja: {sila}/3 | {trend_w_opis})")
 
     if akcja=="HOLD":
         lo=najblizszy(all_lvl,cena,"opor",promien)
@@ -294,12 +303,14 @@ def generuj_sygnal(metal: str) -> dict:
                 eok=abs(ema50-poz)<=EMA_CONF_TOLERANCE*atr; tok=cena<ema200
                 sila=1+int(eok)+int(tok)
                 sl_p=round(poz+sl_dist,2); tp_p=round(cena-abs(sl_p-cena)*TP_R_MULT,2); pobj=lo
-                if sila>=2 and makro["silny_dolar"]:
+                if sila>=MIN_CONFLUENCJA and trend_w < 0 and makro["silny_dolar"]:
                     akcja="SELL"; opis=(f"📉 SHORT od oporu ${poz} [{lo['typ']}]"
-                                        +(" + EMA 50" if eok else "")+(" + trend" if tok else ""))
-                elif sila>=1:
+                                        +(" + EMA 50" if eok else "")+(" + trend" if tok else "")
+                                        +f" | {trend_w_opis}")
+                elif sila>=2:
                     akcja="CAUTION_BUY"
-                    opis=f"⚠️ OSTROŻNY SHORT od ${poz} [{lo['typ']}] (confluencja: {sila}/3)"
+                    opis=(f"⚠️ OSTROŻNY SHORT od ${poz} [{lo['typ']}] "
+                          f"(confluencja: {sila}/3 | {trend_w_opis})")
 
     if akcja in ("BUY","SELL") and pobj:
         wyslij_email(nazwa,akcja,cena,sl_p,tp_p,makro["trend"],pobj["cena"],sila)
@@ -317,6 +328,7 @@ def generuj_sygnal(metal: str) -> dict:
     return {"kruszec":nazwa,"aktualna_cena_usd":cena,"wskaźnik_rsi":rsi,
             "ema_200":round(ema200,2),"ema_50":round(ema50,2),"zmienność_atr":round(atr,2),
             "trend_glowny":"WZROSTOWY 🟢" if cena>ema200 else "SPADKOWY 🔴",
+            "kierunek_ema200": trend_w_opis,
             "makro_dxy":makro,"rekomendacja":akcja,"opis_sygnalu":opis,
             "sila_sygnalu":sila,"poziomy_strukturalne":poz_zasiegu,"najblizszy_poziom":pobj,
             "zarządzanie_ryzykiem":{"proponowany_stop_loss_usd":sl_p,
@@ -347,6 +359,13 @@ def wykonaj_backtest(metal: str, okres: str="2y",
     pdh_s,pdl_s,pwh_s,pwl_s=oblicz_pdh_pdl_pwh_pwl(df)
     pdh=pdh_s.to_numpy(float); pdl=pdl_s.to_numpy(float)
     pwh=pwh_s.to_numpy(float); pwl=pwl_s.to_numpy(float)
+
+    # Kierunek EMA200 w horyzoncie 1 tygodnia (N_SLOPE_BARS barów 1H)
+    # +1=wzrostowy → tylko LONG, -1=spadkowy → tylko SHORT
+    ema200_np = df["EMA200"].to_numpy()
+    trend_w_arr = np.zeros(len(df))
+    for _j in range(N_SLOPE_BARS, len(df)):
+        trend_w_arr[_j] = 1.0 if ema200_np[_j] > ema200_np[_j - N_SLOPE_BARS] else -1.0
 
     kapital=kapital_startowy
     hist_kap=[{"data":df.index[220].strftime("%Y-%m-%d"),"kapital":kapital}]
@@ -394,23 +413,24 @@ def wykonaj_backtest(metal: str, okres: str="2y",
             lvls=zbierz_poziomy(i,sh_all,sl_all,pdh,pdl,pwh,pwl,cena)
             sld=sl_atr*atr; prom=APPROACH_THRESHOLD*atr; etol=EMA_CONF_TOLERANCE*atr
             lp2=float(df.iloc[i-1]["Low"]); hp2=float(df.iloc[i-1]["High"])
+            trend_w = trend_w_arr[i]  # +1=wzrost, -1=spadek, 0=brak danych
 
             lw=najblizszy(lvls,cena,"wsparcie",prom)
-            if lw:
+            if lw and trend_w > 0:        # LONG tylko gdy EMA200 rośnie od tygodnia
                 pz=lw["cena"]
                 if (low<=pz*1.002 or lp2<=pz*1.002) and cena>pz:
                     eok=abs(e50-pz)<=etol; tok=cena>e200
-                    if (1+int(eok)+int(tok))>=2:
+                    if (1+int(eok)+int(tok))>=MIN_CONFLUENCJA:
                         sl_n=round(pz-sld,2); tp_n=round(cena+abs(cena-sl_n)*tp_r,2)
                         ry=kapital*RISK_PCT; wiel=ry/max(abs(cena-sl_n),0.01)
                         poz,cent,sl,tp="LONG",cena,sl_n,tp_n; continue
 
             lo=najblizszy(lvls,cena,"opor",prom)
-            if lo:
+            if lo and trend_w < 0:        # SHORT tylko gdy EMA200 spada od tygodnia
                 pz=lo["cena"]
                 if (high>=pz*0.998 or hp2>=pz*0.998) and cena<pz:
                     eok=abs(e50-pz)<=etol; tok=cena<e200
-                    if (1+int(eok)+int(tok))>=2:
+                    if (1+int(eok)+int(tok))>=MIN_CONFLUENCJA:
                         sl_n=round(pz+sld,2); tp_n=round(cena-abs(sl_n-cena)*tp_r,2)
                         ry=kapital*RISK_PCT; wiel=ry/max(abs(sl_n-cena),0.01)
                         poz,cent,sl,tp="SHORT",cena,sl_n,tp_n; continue
