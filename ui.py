@@ -60,12 +60,9 @@ with tab1:
         with c4:
             gwiazdki = ("⭐" * sila + "☆" * (3 - sila)) if sila else "—"
             st.metric("Siła Sygnału", gwiazdki, f"{sila}/3 czynniki")
-            nlvl = dane.get("najblizszy_poziom")
-            if nlvl:
-                odl = abs(dane["aktualna_cena_usd"] - nlvl["cena"])
-                st.metric("Najbliższy poziom", f"${nlvl['cena']:,.2f}", f"{nlvl['typ']} ({odl:.1f}$ dalej)")
-            else:
-                st.metric("Najbliższy poziom", "Brak w zasięgu")
+            # Kierunek EMA200 — nowy filtr trendowy
+            kier_ema = dane.get("kierunek_ema200", "—")
+            st.metric("Kierunek EMA200 (7d)", kier_ema)
         with c5:
             ryzyko = dane["zarządzanie_ryzykiem"]
             st.info(f"🛑 **SL:** ${ryzyko['proponowany_stop_loss_usd']:,.2f}")
