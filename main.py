@@ -23,7 +23,7 @@ EMAIL_ODBIORCY = os.environ.get("EMAIL_ODBIORCY", "mikolajgwizdak@gmail.com")
 PLIK_SYMULACJI = "symulacje.json"
 
 SL_ATR_MULT        = 1.5
-TP_R_MULT          = 2.0
+TP_R_MULT          = 4.0    # wynik grid search: 4R najlepsza matematyka przy win rate ~24%
 EMA_CONF_TOLERANCE = 1.0
 APPROACH_THRESHOLD = 1.5    # było 3.0 — teraz tylko sygnały BLISKO poziomu
 MIN_CONFLUENCJA    = 3      # było 2 — teraz WSZYSTKIE 3 czynniki muszą grać
