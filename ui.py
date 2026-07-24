@@ -192,7 +192,7 @@ with tab2:
     with p3:
         sl_atr_v = st.selectbox("SL (× ATR):", (1.2, 1.5, 1.8, 2.0), index=1)
     with p4:
-        tp_r_v   = st.selectbox("TP (R-Multiple):", (1.0, 1.5, 2.0, 3.0), index=2)
+        tp_r_v   = st.selectbox("TP (R-Multiple):", (1.0, 1.5, 2.0, 3.0, 4.0, 5.0), index=2)
     with p5:
         st.write(""); st.write("")
         run_bt = st.button("🚀 URUCHOM", use_container_width=True, type="primary")
