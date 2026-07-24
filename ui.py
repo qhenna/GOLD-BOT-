@@ -407,4 +407,5 @@ with tab3:
         st.dataframe(df_sym, use_container_width=True, hide_index=True)
     else:
         st.info("Brak zapisanych symulacji. "
-                "Bot zapisze pierwszą pozycję gdy wykryje sygnał strukturalny (siła ≥ 2/3).")
+                "Bot zapisze pierwszą pozycję gdy wykryje sygnał strukturalny "
+                "(wymagana siła ≥ 3/3: poziom + EMA 50 + trend tygodniowy).")
