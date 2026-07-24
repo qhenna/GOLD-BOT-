@@ -273,6 +273,105 @@ with tab2:
                 df_m_show.columns = ["Miesiąc", "Transakcji", "P&L ($)", "Zwrot (%)"]
                 st.dataframe(df_m_show, use_container_width=True, hide_index=True)
 
+            # ── Rolling Window Analysis ───────────────────────────
+            rw = wyniki.get("rolling_window", {})
+            kwartalnie = rw.get("kwartalnie", [])
+            if kwartalnie:
+                st.divider()
+                st.subheader("🔬 Rolling Window Analysis — wyniki per kwartał")
+                st.caption("To jest kluczowa analiza: pokazuje w jakich warunkach rynkowych "
+                           "strategia zarabia, a w jakich traci. Niezbędna przed realnym kapitałem.")
+
+                # Wniosek kluczowy — najważniejsza informacja
+                wniosek = rw.get("wniosek", "")
+                st.info(f"💡 **Wniosek:** {wniosek}")
+
+                # 3 metryki reżymowe obok siebie
+                stats = rw.get("statystyki", {})
+                r1, r2, r3 = st.columns(3)
+                def _rezym_metric(col, label, emoji, tag):
+                    s = stats.get(tag, {})
+                    avg = s.get("avg_pnl")
+                    n   = s.get("n", 0)
+                    if avg is not None and n > 0:
+                        kol = "normal" if avg >= 0 else "inverse"
+                        col.metric(f"{emoji} {label}", f"{avg:+.2f}$/kw.", f"{n} kwartałów")
+                    else:
+                        col.metric(f"{emoji} {label}", "Brak danych", f"0 kwartałów")
+                _rezym_metric(r1, "Trend wzrostowy", "📈", "wzrostowy")
+                _rezym_metric(r2, "Trend spadkowy",  "📉", "spadkowy")
+                _rezym_metric(r3, "Rynek boczny",    "↔️", "boczny")
+
+                st.write("")
+
+                # Wykres kwartalny — kolory wg reżymu rynku
+                df_rw = pd.DataFrame(kwartalnie)
+
+                def _kolor_baru(rezym: str) -> str:
+                    if "Wzrostowy" in rezym and "silny" in rezym:  return "#00C853"
+                    if "Wzrostowy" in rezym:                        return "#69F0AE"
+                    if "Spadkowy"  in rezym and "silny" in rezym:  return "#FF1744"
+                    if "Spadkowy"  in rezym:                        return "#FF6D00"
+                    return "#888888"  # boczny
+
+                kolory_q = [_kolor_baru(r) for r in df_rw["rezym"]]
+                symbole  = ["▲" if v >= 0 else "▼" for v in df_rw["pnl_usd"]]
+
+                fig_rw = go.Figure()
+                fig_rw.add_trace(go.Bar(
+                    x=df_rw["kwartal"],
+                    y=df_rw["pnl_usd"],
+                    marker_color=kolory_q,
+                    text=[f"{s} ${abs(v):,.0f}" for s, v in zip(symbole, df_rw["pnl_usd"])],
+                    textposition="outside",
+                    customdata=df_rw[["n_trades", "win_rate", "rezym"]].values,
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        "P&L: $%{y:,.2f}<br>"
+                        "Transakcji: %{customdata[0]}<br>"
+                        "Win Rate: %{customdata[1]}%<br>"
+                        "Reżym: %{customdata[2]}<extra></extra>"
+                    ),
+                    name="P&L kwartalny ($)"
+                ))
+                fig_rw.add_hline(y=0, line_color="#555555", line_width=1)
+                fig_rw.update_layout(
+                    height=350, template="plotly_dark",
+                    yaxis_title="P&L ($)",
+                    margin=dict(l=20, r=20, t=30, b=20),
+                    title=dict(
+                        text="<span style='font-size:11px;color:#888'>🟢 Silny wzrost &nbsp; "
+                             "🟩 Umiarkowany wzrost &nbsp; 🟠 Trend spadkowy &nbsp; "
+                             "⬜ Rynek boczny</span>",
+                        x=0.01, xanchor="left"
+                    )
+                )
+                st.plotly_chart(fig_rw, use_container_width=True)
+
+                # Tabela kwartalna z pełnymi danymi
+                df_rw_show = df_rw[["kwartal", "n_trades", "win_rate",
+                                     "pnl_usd", "pct_change",
+                                     "kapital_start", "kapital_end", "rezym"]].copy()
+                df_rw_show.columns = ["Kwartał", "Transakcji", "Win Rate (%)",
+                                       "P&L ($)", "Zmiana (%)",
+                                       "Kapitał start ($)", "Kapitał end ($)", "Reżym rynku"]
+                st.dataframe(df_rw_show, use_container_width=True, hide_index=True)
+
+                # Minianaliza: kiedy strategia NIE działa
+                przegrane_q = [w for w in kwartalnie if w["pnl_usd"] < 0]
+                if przegrane_q:
+                    rezym_strat = [w["rezym"] for w in przegrane_q]
+                    with st.expander(f"🔴 Analiza {len(przegrane_q)} stratnych kwartałów"):
+                        for w in przegrane_q:
+                            st.markdown(
+                                f"**{w['kwartal']}**: {w['pnl_usd']:+.2f}$ | "
+                                f"Win Rate: {w['win_rate']}% | "
+                                f"Reżym: {w['rezym']}"
+                            )
+                        st.caption("👆 Jeśli większość strat przypada na rynek boczny (↔️), "
+                                   "warto dodać filtr trendu (np. tylko trade gdy EMA 200 ma "
+                                   "wzrostowy kierunek na interwale tygodniowym).")
+
             # ── lista transakcji ──────────────────────────────────
             with st.expander(f"📜 Lista wszystkich transakcji ({wyniki['laczna_liczba_transakcji']})"):
                 lst = wyniki.get("lista_transakcji", [])
