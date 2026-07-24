@@ -447,34 +447,38 @@ def wykonaj_backtest(metal: str,
         # ── ZAMKNIĘCIE OTWARTEJ POZYCJI ──────────────────────────
         if pozycja == "LONG":
             if low <= sl:
-                # [FIX] exit po SL (nie po `low` jak byłoby błędem)
                 pnl = (sl - cena_ent) * wielkosc    # ujemny
+                k_pre = kapital
                 kapital += pnl; przegrane += 1; pozycja = None
                 transakcje.append({"data": data_s, "typ": "LONG",  "wynik": "❌ SL",
-                                    "pnl": round(pnl, 2), "cena_exit": round(sl, 2)})
+                                    "pnl": round(pnl, 2), "cena_exit": round(sl, 2),
+                                    "kapital_przed": round(k_pre, 2), "kapital_po": round(kapital, 2)})
                 miesiace[mies]["pnl"] += pnl; miesiace[mies]["n"] += 1
             elif high >= tp:
                 pnl = (tp - cena_ent) * wielkosc    # dodatni
+                k_pre = kapital
                 kapital += pnl; wygrane += 1; pozycja = None
                 transakcje.append({"data": data_s, "typ": "LONG",  "wynik": "🟢 TP",
-                                    "pnl": round(pnl, 2), "cena_exit": round(tp, 2)})
+                                    "pnl": round(pnl, 2), "cena_exit": round(tp, 2),
+                                    "kapital_przed": round(k_pre, 2), "kapital_po": round(kapital, 2)})
                 miesiace[mies]["pnl"] += pnl; miesiace[mies]["n"] += 1
 
         elif pozycja == "SHORT":
             if high >= sl:
-                # [FIX] exit po SL (nie po `high` jak był błąd w oryginale)
-                # sl > cena_ent dla short → (sl - cena_ent) > 0 → strata ujemna
                 pnl = -(sl - cena_ent) * wielkosc   # ujemny
+                k_pre = kapital
                 kapital += pnl; przegrane += 1; pozycja = None
                 transakcje.append({"data": data_s, "typ": "SHORT", "wynik": "❌ SL",
-                                    "pnl": round(pnl, 2), "cena_exit": round(sl, 2)})
+                                    "pnl": round(pnl, 2), "cena_exit": round(sl, 2),
+                                    "kapital_przed": round(k_pre, 2), "kapital_po": round(kapital, 2)})
                 miesiace[mies]["pnl"] += pnl; miesiace[mies]["n"] += 1
             elif low <= tp:
-                # tp < cena_ent dla short → (cena_ent - tp) > 0 → zysk
                 pnl = (cena_ent - tp) * wielkosc     # dodatni
+                k_pre = kapital
                 kapital += pnl; wygrane += 1; pozycja = None
                 transakcje.append({"data": data_s, "typ": "SHORT", "wynik": "🟢 TP",
-                                    "pnl": round(pnl, 2), "cena_exit": round(tp, 2)})
+                                    "pnl": round(pnl, 2), "cena_exit": round(tp, 2),
+                                    "kapital_przed": round(k_pre, 2), "kapital_po": round(kapital, 2)})
                 miesiace[mies]["pnl"] += pnl; miesiace[mies]["n"] += 1
 
         # ── SZUKANIE NOWEGO SYGNAŁU ───────────────────────────────
@@ -529,6 +533,8 @@ def wykonaj_backtest(metal: str,
         for m, v in sorted(miesiace.items()) if v["n"] > 0
     ]
 
+    rolling = _rolling_window_analysis(transakcje, df)
+
     return {
         "kruszec":            nazwa,
         "parametry":          {"sl_atr": sl_atr, "tp_r": tp_r},
@@ -542,7 +548,124 @@ def wykonaj_backtest(metal: str,
         "win_rate":           round(wygrane / total * 100, 1) if total > 0 else 0.0,
         "historia_kapitalu":  hist_kap,
         "rozklad_miesieczny": rozklad,
+        "rolling_window":     rolling,
         "lista_transakcji":   transakcje[::-1],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────
+# ROLLING WINDOW ANALYSIS (kluczowa analiza reżymów rynkowych)
+# ─────────────────────────────────────────────────────────────────
+
+def _rolling_window_analysis(transakcje: list, df: pd.DataFrame) -> dict:
+    """
+    Grupuje transakcje po KWARTAŁACH i dla każdego oblicza:
+    - wyniki finansowe (P&L, win rate, kapitał)
+    - reżym rynku (silny trend / umiarkowany / boczny)
+
+    To pozwala odpowiedzieć na pytanie: w jakich warunkach strategia zarabia,
+    a w jakich traci? Kluczowe PRZED przejściem na realny kapitał.
+    """
+    if not transakcje:
+        return {"kwartalnie": [], "wniosek": "Brak transakcji do analizy."}
+
+    # Grupowanie po kwartałach
+    kwartaly: dict = {}
+    for t in transakcje:
+        try:
+            dt = pd.Timestamp(t["data"])
+            q  = f"{dt.year}-Q{(dt.month - 1) // 3 + 1}"
+            kwartaly.setdefault(q, {"dt": dt, "trades": []})
+            kwartaly[q]["trades"].append(t)
+        except Exception:
+            continue
+
+    wyniki = []
+    for q in sorted(kwartaly.keys()):
+        trades  = kwartaly[q]["trades"]
+        dt_q    = kwartaly[q]["dt"]
+        n       = len(trades)
+        pnl     = sum(t["pnl"] for t in trades)
+        wygrane = sum(1 for t in trades if t["pnl"] > 0)
+        k_start = trades[0].get("kapital_przed", 0)
+        k_end   = trades[-1].get("kapital_po",   0)
+        pct     = round((k_end / k_start - 1) * 100, 2) if k_start > 0 else 0.0
+
+        # ── Reżym rynku dla tego kwartału ──────────────────────
+        dt_end = dt_q + pd.DateOffset(months=3)
+        df_q   = df[(df.index >= dt_q) & (df.index < dt_end)]
+        rezym, trend_tag = "?", "neutralny"
+
+        if len(df_q) > 20:
+            c_start = float(df_q["Close"].iloc[0])
+            c_end   = float(df_q["Close"].iloc[-1])
+            zasieg  = float(df_q["High"].max() - df_q["Low"].min())
+            zmiana  = c_end - c_start
+            # sila_trendu: 0=boczny, 1=idealny trend
+            # im większa część zasięgu to ruch kierunkowy, tym silniejszy trend
+            sila = abs(zmiana) / zasieg if zasieg > 0 else 0
+
+            if zmiana > 0:
+                kierunek, trend_tag = "📈 Wzrostowy", "wzrostowy"
+            else:
+                kierunek, trend_tag = "📉 Spadkowy",  "spadkowy"
+
+            if sila > 0.35:
+                rezym = f"{kierunek} — silny trend ({sila*100:.0f}% zasięgu)"
+            elif sila > 0.15:
+                rezym = f"{kierunek} — umiarkowany ({sila*100:.0f}%)"
+            else:
+                rezym = f"↔️ Boczny / Choppy ({sila*100:.0f}% zasięgu)"
+                trend_tag = "boczny"
+
+        wyniki.append({
+            "kwartal":      q,
+            "n_trades":     n,
+            "wygrane":      wygrane,
+            "przegrane":    n - wygrane,
+            "win_rate":     round(wygrane / n * 100, 1) if n > 0 else 0.0,
+            "pnl_usd":      round(pnl, 2),
+            "kapital_start": round(k_start, 2),
+            "kapital_end":  round(k_end, 2),
+            "pct_change":   pct,
+            "rezym":        rezym,
+            "_tag":         trend_tag,   # wewnętrzne, do wniosku
+        })
+
+    # ── Wniosek kluczowy ───────────────────────────────────────
+    def _stat(tag):
+        sub = [w for w in wyniki if w["_tag"] == tag]
+        if not sub:
+            return None, 0
+        return round(sum(w["pnl_usd"] for w in sub) / len(sub), 2), len(sub)
+
+    avg_wzr,  n_wzr  = _stat("wzrostowy")
+    avg_spad, n_spad = _stat("spadkowy")
+    avg_bocz, n_bocz = _stat("boczny")
+
+    zysk_q  = sum(1 for w in wyniki if w["pnl_usd"] > 0)
+    total_q = len(wyniki)
+    pct_q   = round(zysk_q / total_q * 100) if total_q else 0
+
+    wniosek_czesci = [
+        f"Strategia zyska w {zysk_q}/{total_q} kwartałów ({pct_q}% czasu)."
+    ]
+    if avg_wzr  is not None: wniosek_czesci.append(f"📈 Trend wzrostowy ({n_wzr} kw.): śr. {avg_wzr:+.2f}$/kw.")
+    if avg_spad is not None: wniosek_czesci.append(f"📉 Trend spadkowy ({n_spad} kw.): śr. {avg_spad:+.2f}$/kw.")
+    if avg_bocz is not None: wniosek_czesci.append(f"↔️ Rynek boczny ({n_bocz} kw.): śr. {avg_bocz:+.2f}$/kw.")
+
+    # Usuń tag wewnętrzny z outputu
+    for w in wyniki:
+        w.pop("_tag", None)
+
+    return {
+        "kwartalnie": wyniki,
+        "wniosek":    " | ".join(wniosek_czesci),
+        "statystyki": {
+            "wzrostowy": {"avg_pnl": avg_wzr,  "n": n_wzr},
+            "spadkowy":  {"avg_pnl": avg_spad, "n": n_spad},
+            "boczny":    {"avg_pnl": avg_bocz, "n": n_bocz},
+        }
     }
 
 
