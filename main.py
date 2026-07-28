@@ -312,10 +312,17 @@ def generuj_sygnal(metal: str) -> dict:
                     opis=(f"⚠️ OSTROŻNY SHORT od ${poz} [{lo['typ']}] "
                           f"(confluencja: {sila}/3 | {trend_w_opis})")
 
-    if akcja in ("BUY","SELL") and pobj:
-        wyslij_email(nazwa,akcja,cena,sl_p,tp_p,makro["trend"],pobj["cena"],sila)
-        dodaj_symulacje(nazwa,"LONG" if akcja=="BUY" else "SHORT",
-                        cena,sl_p,tp_p,f"{pobj['typ']} @ ${pobj['cena']}")
+    if akcja in ("BUY","SELL","CAUTION_BUY") and pobj:
+        if akcja == "BUY":
+            typ_sym = "LONG ✅ (3/3)"
+        elif akcja == "SELL":
+            typ_sym = "SHORT ✅ (3/3)"
+        else:
+            typ_sym = "CAUTION LONG 🟡 (2/3)" if "LONG" in opis else "CAUTION SHORT 🟡 (2/3)"
+        # Email tylko dla pewnych sygnałów (3/3)
+        if akcja in ("BUY","SELL"):
+            wyslij_email(nazwa,akcja,cena,sl_p,tp_p,makro["trend"],pobj["cena"],sila)
+        dodaj_symulacje(nazwa,typ_sym,cena,sl_p,tp_p,f"{pobj['typ']} @ ${pobj['cena']}")
 
     rr=round(abs(tp_p-cena)/max(abs(cena-sl_p),0.01),2)
     historia=[{"data":idx.strftime("%Y-%m-%d %H:%M"),
