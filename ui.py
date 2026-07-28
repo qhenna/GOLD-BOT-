@@ -120,8 +120,8 @@ with tab1:
                 line=dict(color="#FFA500", width=1.5, dash="dash")
             ))
 
-        # SL i TP — wyświetlamy TYLKO gdy jest aktywny sygnał (nie HOLD)
-        if rek != "HOLD":
+        # SL i TP — wyświetlamy TYLKO gdy jest potwierdzony sygnał BUY lub SELL (nie CAUTION)
+        if rek in ("BUY", "SELL"):
             fig.add_hline(y=ryzyko["proponowany_take_profit_usd"],
                           line_dash="dash", line_color="#00C853", line_width=1.5,
                           annotation_text="🎯 TP", annotation_position="right",
@@ -130,6 +130,16 @@ with tab1:
                           line_dash="dash", line_color="#FF1744", line_width=1.5,
                           annotation_text="🛑 SL", annotation_position="right",
                           annotation_font_color="#FF1744")
+        elif rek == "CAUTION_BUY":
+            # Dla CAUTION pokazujemy linie szare/półprzezroczyste — to NIE jest aktywna pozycja
+            fig.add_hline(y=ryzyko["proponowany_take_profit_usd"],
+                          line_dash="dot", line_color="#666666", line_width=1,
+                          annotation_text="(potencjalny TP)", annotation_position="right",
+                          annotation_font_color="#666666")
+            fig.add_hline(y=ryzyko["proponowany_stop_loss_usd"],
+                          line_dash="dot", line_color="#666666", line_width=1,
+                          annotation_text="(potencjalny SL)", annotation_position="right",
+                          annotation_font_color="#666666")
 
         # Poziomy strukturalne (te w zasięgu ±3% ceny)
         KOLOR_POZIOMU = {
@@ -383,30 +393,55 @@ with tab2:
 # ═══════════════════════════════════════════════════════════════════
 with tab3:
     st.subheader("💼 Dziennik Symulacji na Żywo (Forward Test)")
-    st.markdown("Bot zapisuje tutaj każdą pozycję według strategii strukturalnej. "
-                "Status aktualizuje się przy każdym odświeżeniu.")
 
-    if st.button("🔄 Odśwież status pozycji", type="primary"):
-        st.rerun()
+    # ── Wyjaśnienie ──────────────────────────────────────────────
+    st.info(
+        "**Jak czytać dziennik:**\n"
+        "- 🟢 **BUY / SELL** — sygnał 3/3: bot by otworzył pozycję (pełna confluencja)\n"
+        "- 🟡 **CAUTION** — sygnał 2/3: ciekawy poziom, ale brakuje jednego warunku\n"
+        "- Status aktualizuje się po kliknięciu Odśwież\n\n"
+        "⚠️ **Uwaga:** Na Streamlit Cloud dane nie przeżywają restartu aplikacji — "
+        "dziennik może być pusty po każdym \"uśpieniu\" apki. "
+        "To jest ograniczenie platformy, nie błąd bota."
+    )
 
+    c_btn1, c_btn2 = st.columns([1, 4])
+    with c_btn1:
+        if st.button("🔄 Odśwież", type="primary"):
+            st.rerun()
+    with c_btn2:
+        if st.button("🗑️ Wyczyść dziennik"):
+            if "dziennik" in st.session_state:
+                st.session_state["dziennik"] = []
+            st.rerun()
+
+    # ── Pobierz i wyświetl symulacje ──────────────────────────────
     sym = pobierz_symulacje_api()
+
     if sym:
         df_sym = pd.DataFrame(sym)
 
-        # Podsumowanie statystyk
-        s1, s2, s3, s4 = st.columns(4)
-        otwarte = sum(1 for s in sym if "OTWARTA" in s["status"])
-        zyski   = sum(1 for s in sym if "ZYSK"    in s["status"])
-        straty  = sum(1 for s in sym if "STRATA"  in s["status"])
+        # Statystyki
+        s1, s2, s3, s4, s5 = st.columns(5)
+        otwarte = sum(1 for s in sym if "OTWARTA" in str(s.get("status","")))
+        zyski   = sum(1 for s in sym if "ZYSK"    in str(s.get("status","")))
+        straty  = sum(1 for s in sym if "STRATA"  in str(s.get("status","")))
+        caution = sum(1 for s in sym if "CAUTION" in str(s.get("typ","")))
         total_pnl = sum(s.get("wynik_usd", 0) for s in sym)
-        s1.metric("Łącznie pozycji", len(sym))
-        s2.metric("Otwarte 🟢",      otwarte)
-        s3.metric("Zamknięte z zyskiem ✅", zyski)
-        s4.metric("Łączny wynik P&L", f"${total_pnl:,.2f}")
+        s1.metric("Łącznie sygnałów", len(sym))
+        s2.metric("Otwarte 🟢",       otwarte)
+        s3.metric("Zamknięte ✅/❌",   zyski + straty, f"+{zyski} / -{straty}")
+        s4.metric("CAUTION (2/3) 🟡", caution)
+        s5.metric("Łączny wynik P&L", f"${total_pnl:,.2f}")
 
         st.divider()
         st.dataframe(df_sym, use_container_width=True, hide_index=True)
     else:
-        st.info("Brak zapisanych symulacji. "
-                "Bot zapisze pierwszą pozycję gdy wykryje sygnał strukturalny "
-                "(wymagana siła ≥ 3/3: poziom + EMA 50 + trend tygodniowy).")
+        st.warning(
+            "Brak zapisanych sygnałów w tej sesji.\n\n"
+            "Bot zapisuje sygnały gdy:\n"
+            "- Silne (3/3): BUY lub SELL\n"
+            "- Słabsze (2/3): CAUTION\n\n"
+            "Sygnał pojawi się tu automatycznie gdy bot go wykryje podczas "
+            "co-godzinnego skanowania (:01 każdej godziny)."
+        )
