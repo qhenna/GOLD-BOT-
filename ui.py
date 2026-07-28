@@ -6,6 +6,7 @@ Odczytuje dane bezpośrednio z main.py (bez HTTP).
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+from datetime import datetime
 from main import generuj_sygnal, wykonaj_backtest, pobierz_symulacje_api
 
 st.set_page_config(
@@ -14,6 +15,12 @@ st.set_page_config(
     page_icon="🥇",
     initial_sidebar_state="collapsed"
 )
+
+# ── Session state — dziennik sygnałów (nie plik, bo Streamlit Cloud kasuje pliki) ──
+if "dziennik" not in st.session_state:
+    st.session_state["dziennik"] = []
+if "ostatni_sig_id" not in st.session_state:
+    st.session_state["ostatni_sig_id"] = None
 
 # ── nagłówek ─────────────────────────────────────────────────────
 h1, h2 = st.columns([4, 1])
@@ -85,6 +92,34 @@ with tab1:
         elif rek == "SELL":        st.error(  f"🤖 **SYGNAŁ:** {dane['opis_sygnalu']}")
         elif rek == "CAUTION_BUY": st.warning(f"🤖 **SYGNAŁ:** {dane['opis_sygnalu']}")
         else:                      st.info(   f"🤖 **SYGNAŁ:** {dane['opis_sygnalu']}")
+
+        # ── Zapis do dziennika (session_state — niezawodny na Streamlit Cloud) ──
+        _pobj = dane.get("najblizszy_poziom")
+        if rek in ("BUY", "SELL", "CAUTION_BUY") and _pobj:
+            _sig_id = f"{rek}_{_pobj.get('cena','')}"
+            if st.session_state["ostatni_sig_id"] != _sig_id:
+                st.session_state["ostatni_sig_id"] = _sig_id
+                _opis = dane.get("opis_sygnalu", "")
+                _ryzyko = dane["zarządzanie_ryzykiem"]
+                if rek == "BUY":
+                    _typ = "LONG ✅ (3/3)"
+                elif rek == "SELL":
+                    _typ = "SHORT ✅ (3/3)"
+                else:
+                    _typ = ("CAUTION LONG 🟡 (2/3)" if "wsparcia" in _opis
+                            else "CAUTION SHORT 🟡 (2/3)")
+                st.session_state["dziennik"].append({
+                    "id":             len(st.session_state["dziennik"]) + 1,
+                    "data_wykrycia":  datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "typ":            _typ,
+                    "cena_wejscia":   dane["aktualna_cena_usd"],
+                    "stop_loss":      _ryzyko["proponowany_stop_loss_usd"],
+                    "take_profit":    _ryzyko["proponowany_take_profit_usd"],
+                    "r_r":            _ryzyko["stosunek_zysk_ryzyko"],
+                    "poziom":         f"{_pobj['typ']} @ ${_pobj['cena']}",
+                    "sila":           f"{sila}/3",
+                    "opis":           _opis[:90] + ("…" if len(_opis) > 90 else ""),
+                })
 
         st.divider()
 
@@ -392,56 +427,50 @@ with tab2:
 # ZAKŁADKA 3: DZIENNIK SYMULACJI
 # ═══════════════════════════════════════════════════════════════════
 with tab3:
-    st.subheader("💼 Dziennik Symulacji na Żywo (Forward Test)")
+    st.subheader("💼 Dziennik Sygnałów — Forward Test")
+    st.caption("Sygnały wykryte przez bota w tej sesji przeglądarki. "
+               "Dane przeżywają przełączanie zakładek i odświeżenia, "
+               "ale nie przeżywają zamknięcia przeglądarki (ograniczenie Streamlit Cloud).")
 
-    # ── Wyjaśnienie ──────────────────────────────────────────────
-    st.info(
-        "**Jak czytać dziennik:**\n"
-        "- 🟢 **BUY / SELL** — sygnał 3/3: bot by otworzył pozycję (pełna confluencja)\n"
-        "- 🟡 **CAUTION** — sygnał 2/3: ciekawy poziom, ale brakuje jednego warunku\n"
-        "- Status aktualizuje się po kliknięciu Odśwież\n\n"
-        "⚠️ **Uwaga:** Na Streamlit Cloud dane nie przeżywają restartu aplikacji — "
-        "dziennik może być pusty po każdym \"uśpieniu\" apki. "
-        "To jest ograniczenie platformy, nie błąd bota."
-    )
-
-    c_btn1, c_btn2 = st.columns([1, 4])
+    c_btn1, c_btn2 = st.columns([1, 5])
     with c_btn1:
-        if st.button("🔄 Odśwież", type="primary"):
-            st.rerun()
-    with c_btn2:
         if st.button("🗑️ Wyczyść dziennik"):
-            if "dziennik" in st.session_state:
-                st.session_state["dziennik"] = []
+            st.session_state["dziennik"] = []
+            st.session_state["ostatni_sig_id"] = None
             st.rerun()
 
-    # ── Pobierz i wyświetl symulacje ──────────────────────────────
-    sym = pobierz_symulacje_api()
+    st.divider()
+    dziennik = st.session_state.get("dziennik", [])
 
-    if sym:
-        df_sym = pd.DataFrame(sym)
-
+    if dziennik:
         # Statystyki
-        s1, s2, s3, s4, s5 = st.columns(5)
-        otwarte = sum(1 for s in sym if "OTWARTA" in str(s.get("status","")))
-        zyski   = sum(1 for s in sym if "ZYSK"    in str(s.get("status","")))
-        straty  = sum(1 for s in sym if "STRATA"  in str(s.get("status","")))
-        caution = sum(1 for s in sym if "CAUTION" in str(s.get("typ","")))
-        total_pnl = sum(s.get("wynik_usd", 0) for s in sym)
-        s1.metric("Łącznie sygnałów", len(sym))
-        s2.metric("Otwarte 🟢",       otwarte)
-        s3.metric("Zamknięte ✅/❌",   zyski + straty, f"+{zyski} / -{straty}")
-        s4.metric("CAUTION (2/3) 🟡", caution)
-        s5.metric("Łączny wynik P&L", f"${total_pnl:,.2f}")
+        n_buy  = sum(1 for s in dziennik if "LONG ✅" in s.get("typ",""))
+        n_sell = sum(1 for s in dziennik if "SHORT ✅" in s.get("typ",""))
+        n_caut = sum(1 for s in dziennik if "CAUTION" in s.get("typ",""))
+
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Łącznie sygnałów", len(dziennik))
+        d2.metric("LONG 3/3 ✅",       n_buy)
+        d3.metric("SHORT 3/3 ✅",      n_sell)
+        d4.metric("CAUTION 2/3 🟡",    n_caut)
 
         st.divider()
-        st.dataframe(df_sym, use_container_width=True, hide_index=True)
+
+        df_dz = pd.DataFrame(dziennik)
+        st.dataframe(df_dz, use_container_width=True, hide_index=True)
+
+        st.caption("💡 **Jak używać:** Otwórz Terminal → porównaj każdy sygnał z wykresem na "
+                   "ATAS. Czy bot widzi te same poziomy co Ty? Czy SL/TP były trafne? "
+                   "To jest kluczowe pytanie przed przejściem na realny kapitał.")
     else:
-        st.warning(
-            "Brak zapisanych sygnałów w tej sesji.\n\n"
-            "Bot zapisuje sygnały gdy:\n"
-            "- Silne (3/3): BUY lub SELL\n"
-            "- Słabsze (2/3): CAUTION\n\n"
-            "Sygnał pojawi się tu automatycznie gdy bot go wykryje podczas "
-            "co-godzinnego skanowania (:01 każdej godziny)."
+        st.info(
+            "📭 Brak sygnałów w tej sesji.\n\n"
+            "Bot zapisuje sygnał automatycznie gdy go wykryje — "
+            "wystarczy że masz otwartą zakładkę **Terminal na Żywo** "
+            "(co-godzinne skanowanie wykona się automatycznie, "
+            "ale możesz też ręcznie odwiedzić Terminal żeby sprawdzić aktualny sygnał).\n\n"
+            "**Typy sygnałów które zostaną zapisane:**\n"
+            "- 🟢 LONG/SHORT ✅ (3/3) — pełna confluencja, bot 'by otworzył' pozycję\n"
+            "- 🟡 CAUTION (2/3) — ciekawy poziom, ale jeden warunek niezgodny\n"
+            "- ⏳ CZEKAJ — nie jest zapisywany"
         )
